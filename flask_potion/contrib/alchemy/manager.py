@@ -29,9 +29,6 @@ class SQLAlchemyManager(RelationalManager):
     FILTERS_BY_TYPE = FILTERS_BY_TYPE
     PAGINATION_TYPES = (Pagination, SAPagination)
 
-    def __init__(self, resource, model):
-        super(SQLAlchemyManager, self).__init__(resource, model)
-
     def _init_model(self, resource, model, meta):
         mapper = class_mapper(model)
 
@@ -45,7 +42,8 @@ class SQLAlchemyManager(RelationalManager):
             self.id_attribute = mapper.primary_key[0].name
 
         self.id_field = self._get_field_from_column_type(self.id_column, self.id_attribute, io="r")
-        self.default_sort_expression = self.id_column.asc()
+        self.default_sort_expression = self._get_sort_expression(
+            model, meta, self.id_column)
 
         fs = resource.schema
         if meta.include_id:
@@ -85,6 +83,14 @@ class SQLAlchemyManager(RelationalManager):
                 if "w" in io and not (column.nullable or column.default):
                     fs.required.add(name)
                 fs.set(name, self._get_field_from_column_type(column, name, io=io))
+
+    def _get_sort_expression(self, model, meta, id_column):
+        if meta.sort_attribute is None:
+            return id_column.asc()
+
+        attr_name, reverse = meta.sort_attribute
+        attr = getattr(model, attr_name)
+        return attr.desc() if reverse else attr.asc()
 
     def _get_field_from_column_type(self, column, attribute, io="rw"):
         args = ()
@@ -145,7 +151,12 @@ class SQLAlchemyManager(RelationalManager):
         return (a is None) != (b is None) or a != b
 
     def _query(self):
-        return self.model.query
+        query = self.model.query
+        try:
+            query_options = self.resource.meta.query_options
+        except KeyError:
+            return query
+        return query.options(*query_options)
 
     def _query_filter(self, query, expression):
         return query.filter(expression)
@@ -195,7 +206,12 @@ class SQLAlchemyManager(RelationalManager):
             if isinstance(field, fields.ToOne):
                 target_alias = aliased(field.target.meta.model)
                 query = query.outerjoin(target_alias, column).reset_joinpoint()
-                column = getattr(target_alias, field.target.meta.sort_attribute or field.target.manager.id_attribute)
+                sort_attribute = None
+                if field.target.meta.sort_attribute:
+                    sort_attribute, _ = field.target.meta.sort_attribute
+                column = getattr(
+                    target_alias,
+                    sort_attribute or field.target.manager.id_attribute)
 
             order_clauses.append(column.desc() if reverse else column.asc())
 
@@ -229,8 +245,7 @@ class SQLAlchemyManager(RelationalManager):
 
         try:
             session.add(item)
-            if commit:
-                session.commit()
+            self.commit_or_flush(commit)
         except IntegrityError as e:
             session.rollback()
 
@@ -259,8 +274,7 @@ class SQLAlchemyManager(RelationalManager):
             for key, value in changes.items():
                 setattr(item, key, value)
 
-            if commit:
-                session.commit()
+            self.commit_or_flush(commit)
         except IntegrityError as e:
             session.rollback()
 
@@ -276,14 +290,14 @@ class SQLAlchemyManager(RelationalManager):
         after_update.send(self.resource, item=item, changes=actual_changes)
         return item
 
-    def delete(self, item):
+    def delete(self, item, commit=True):
         session = self._get_session()
 
         before_delete.send(self.resource, item=item)
 
         try:
             session.delete(item)
-            session.commit()
+            self.commit_or_flush(commit)
         except IntegrityError as e:
             session.rollback()
 
@@ -322,3 +336,10 @@ class SQLAlchemyManager(RelationalManager):
     def commit(self):
         session = self._get_session()
         session.commit()
+
+    def commit_or_flush(self, commit):
+        session = self._get_session()
+        if commit:
+            session.commit()
+        else:
+            session.flush()

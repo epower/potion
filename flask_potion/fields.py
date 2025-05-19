@@ -281,6 +281,8 @@ class Object(Raw, ResourceBound):
 
         if isinstance(pattern_properties, (type, Raw)):
             self.pattern_properties = _field_from_object(self, pattern_properties)
+        elif isinstance(pattern_properties, dict):
+            self.pattern_properties = {p: _field_from_object(self, f) for p, f in pattern_properties.items()}
 
         def schema():
             request = {"type": "object"}
@@ -548,6 +550,8 @@ class DateTimeString(Raw):
         super(DateTimeString, self).__init__({"type": "string", "format": "date-time"}, **kwargs)
 
     def formatter(self, value):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
         return value.isoformat()
 
     def converter(self, value):
@@ -715,9 +719,9 @@ class Inline(Raw, ResourceBound):
             def _response_schema():
                 if self.resource == self.target:
                     return {"$ref": "#"}
-                return {"$ref": self.resource.routes["describedBy"].rule_factory(self.resource)}
+                return {"$ref": self.target.routes["describedBy"].rule_factory(self.target)}
 
-            if not not self.patchable:
+            if not self.patchable:
                 return _response_schema()
             else:
                 return _response_schema(), self.target.schema.patchable.update
@@ -746,7 +750,10 @@ class Inline(Raw, ResourceBound):
     def format(self, item):
         return self.target.schema.format(item)
 
-    def convert(self, item, update=False):
+    def convert(self, item, update=False, validate=True):
+        if not validate:
+            raise NotImplementedError()
+
         return self.target.schema.convert(item, update=update, patchable=self.patchable)
 
 

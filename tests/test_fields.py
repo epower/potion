@@ -2,7 +2,7 @@ from operator import itemgetter
 from unittest import TestCase
 from uuid import uuid4
 import unittest
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from werkzeug.exceptions import BadRequest
 from flask_potion.exceptions import ValidationError
 from flask_potion import fields
@@ -11,7 +11,7 @@ from flask_potion import fields
 try:
     from datetime import timezone
 except ImportError:
-    from datetime import tzinfo, timedelta
+    from datetime import tzinfo
 
     class timezone(tzinfo):
         def __init__(self, utcoffset, name=None):
@@ -181,6 +181,19 @@ class FieldsTestCase(TestCase):
         self.assertEqual(datetime(2009, 2, 13, 23, 16, 40, 0, timezone.utc),
                          fields.DateTimeString().convert('2009-02-13T23:16:40Z'))
 
+    def test_date_time_string_format(self):
+        timestamp = datetime(
+            2009, 2, 13, 23, 16, 40, 0, timezone(timedelta(hours=2)))
+        self.assertEqual(
+            '2009-02-13T23:16:40+02:00',
+            fields.DateTimeString().format(timestamp))
+
+    def test_date_time_string_format_default_utc(self):
+        timestamp = datetime(2009, 2, 13, 23, 16, 40, 0)
+        self.assertEqual(
+            '2009-02-13T23:16:40+00:00',
+            fields.DateTimeString().format(timestamp))
+
     def test_uri_convert(self):
         with self.assertRaises(ValidationError):
             fields.Uri().convert('foo bad')
@@ -271,10 +284,8 @@ class FieldsTestCase(TestCase):
     def test_object_convert_properties(self):
         pass
 
-    def test_object_convert_pattern(self):
+    def test_object_pattern_schema(self):
         o = fields.Object(fields.Integer, pattern="[A-Z][0-9]+")
-
-        self.assertEqual({"A3": 1, "B12": 2}, o.convert({"A3": 1, "B12": 2}))
 
         self.assertEqual({
                              "type": "object",
@@ -283,6 +294,21 @@ class FieldsTestCase(TestCase):
                                  "[A-Z][0-9]+": {"type": "integer"}
                              }
                          }, o.response)
+
+        o = fields.Object(pattern_properties={"[A-Z][0-9]+": fields.Integer})
+
+        self.assertEqual({
+                             "type": "object",
+                             "additionalProperties": False,
+                             "patternProperties": {
+                                 "[A-Z][0-9]+": {"type": "integer"}
+                             }
+                         }, o.response)
+
+    def test_object_convert_pattern(self):
+        o = fields.Object(fields.Integer, pattern="[A-Z][0-9]+")
+
+        self.assertEqual({"A3": 1, "B12": 2}, o.convert({"A3": 1, "B12": 2}))
 
         with self.assertRaises(ValidationError):
             o.convert({"A2": "string"})
